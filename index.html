@@ -2,25 +2,34 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>MemoMoji</title>
 <style>
   :root {
-    --bg: #f4f1ea;
-    --fg: #1d1b18;
-    --muted: #6b665c;
+    --bg: #e9eff5;
+    --fg: #1a1f26;
+    --muted: #5d6673;
     --panel: #ffffffee;
     --accent: #ff7a1a;
-    --shadow: 0 10px 40px #0002;
+    --shadow: 0 10px 40px #1a1f2622;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #17161a;
-      --fg: #f1efe9;
-      --muted: #a09c93;
-      --panel: #242329ee;
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14171c;
+      --fg: #eef1f5;
+      --muted: #9aa3ae;
+      --panel: #232830ee;
       --shadow: 0 10px 40px #0008;
     }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171c;
+    --fg: #eef1f5;
+    --muted: #9aa3ae;
+    --panel: #232830ee;
+    --shadow: 0 10px 40px #0008;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -30,9 +39,9 @@
     user-select: none; -webkit-user-select: none;
     touch-action: none;
   }
-  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+  canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; cursor: pointer; }
   #hud {
-    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
     display: flex; gap: 18px; align-items: center;
     padding: 8px 18px; border-radius: 999px;
     background: var(--panel); box-shadow: var(--shadow);
@@ -60,6 +69,7 @@
     background: var(--accent); color: #fff; font-weight: 600;
   }
   button:hover { filter: brightness(1.08); }
+  button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
   button small { font-weight: 400; opacity: .85; }
   .big { font-size: 44px; font-weight: 800; margin: 8px 0; font-variant-numeric: tabular-nums; }
 </style>
