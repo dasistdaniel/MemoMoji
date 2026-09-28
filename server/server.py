@@ -3,16 +3,16 @@
 Nur Python-Standardbibliothek (http.server + sqlite3), keine Abhängigkeiten.
 
 Ablauf einer Runde (die Zeit misst der Server, nicht der Browser):
-  POST api/games                  {"level": 100}      -> {"id": "..."}
+  POST api/games                  {"level": 75}       -> {"id": "..."}
   POST api/games/<id>/finish                          -> {"ms": 81234}
   POST api/scores                 {"id": "...", "name": "Anna"}
                                                       -> {"rank": 3, "scores": [...]}
-  GET  api/scores?level=100                           -> {"scores": [...]}
+  GET  api/scores?level=75                            -> {"scores": [...]}
 
 Admin (nur wenn ADMIN_PASSWORD gesetzt ist, Seite unter .../admin):
   POST   api/admin/login          {"password": "..."} -> {"token": "..."}
   POST   api/admin/logout
-  GET    api/admin/scores?level=100                   -> alle Einträge der Stufe
+  GET    api/admin/scores?level=75                    -> alle Einträge der Stufe
   DELETE api/admin/scores/<id>
   POST   api/admin/delete-name    {"name": "..."}     -> löscht alle Einträge des Namens
 Admin-Anfragen schicken den Token als "Authorization: Bearer <token>".
@@ -34,7 +34,7 @@ DB_PATH = os.environ.get("DB_PATH", "/data/memomoji.db")
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__), "..", "public"))
 
 # Anzahl Paare pro Stufe (muss zu LEVELS in index.html passen)
-LEVELS = {40, 100, 175}
+LEVELS = {40, 75, 110}
 # Schneller als das ist kein Mensch: Mindestzeit pro Paar in ms
 MIN_MS_PER_PAIR = 200
 # Unbeendete oder nicht eingetragene Runden werden nach dieser Zeit gelöscht
