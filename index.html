@@ -151,6 +151,7 @@
         b.x = b.x * sx;
         b.y = H - (oldH - b.y) * sy;
         b.px = b.x; b.py = b.y;
+        wake(b);
       }
     }
     canvas.width = Math.round(W * DPR);
@@ -229,7 +230,7 @@
         px: cx - (Math.random() - 0.5) * 0.12,
         py: cy - (Math.random() - 0.3) * 0.08,
         rot: (Math.random() - 0.5) * 0.6,
-        spin: 0,
+        spin: 0, sleep: false, still: 0,
       };
     });
     popping = [];
@@ -244,7 +245,33 @@
   }
 
   // ---------- Physik (Verlet + Kreis-Kollision mit Raster) ----------
+  // Ruhende Emojis "schlafen": Sie bewegen sich nicht mehr und wirken für
+  // andere wie feste Körper. So zittert der Haufen nicht. Sie wachen auf,
+  // sobald ihnen der Halt darunter fehlt oder sie angestoßen werden.
+  const SLEEP_MOVE = 0.25;   // px pro Frame, darunter gilt ein Emoji als ruhig
+  const SLEEP_FRAMES = 15;   // so viele ruhige Frames bis zum Einschlafen
+
   const grid = new Map();
+  const cellKey = (gx, gy) => (gx * 73856093) ^ (gy * 19349663);
+  function buildGrid(cell) {
+    grid.clear();
+    for (let i = 0; i < bodies.length; i++) {
+      const b = bodies[i];
+      const k = cellKey((b.x / cell) | 0, (b.y / cell) | 0);
+      let arr = grid.get(k);
+      if (!arr) grid.set(k, arr = []);
+      arr.push(i);
+    }
+  }
+  function forNeighbors(b, cell, fn) {
+    const gx = (b.x / cell) | 0, gy = (b.y / cell) | 0;
+    for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+      const arr = grid.get(cellKey(gx + ox, gy + oy));
+      if (arr) for (const j of arr) fn(j);
+    }
+  }
+  function wake(b) { b.sleep = false; b.still = 0; }
+
   function step(dt) {
     const h = dt / SUBSTEPS;
     const g = state === "hover" ? 0 : GRAVITY;
@@ -252,9 +279,12 @@
     const cell = d;
     const maxV = r * 0.35;
 
+    for (const b of bodies) { b.fx = b.x; b.fy = b.y; }
+
     for (let s = 0; s < SUBSTEPS; s++) {
       // Integration
       for (const b of bodies) {
+        if (b.sleep) continue;
         let vx = (b.x - b.px) * DAMPING;
         let vy = (b.y - b.py) * DAMPING;
         // Geschwindigkeit begrenzen, damit Überlappungen nicht "explodieren"
@@ -264,54 +294,42 @@
         b.x += vx;
         b.y += vy + g * h * h;
         b.rot += b.spin * h;
-        b.spin *= 0.995;
+        b.spin *= 0.99;
       }
 
       for (let it = 0; it < ITERATIONS; it++) {
-        // Raster aufbauen
-        grid.clear();
-        for (let i = 0; i < bodies.length; i++) {
-          const b = bodies[i];
-          const k = ((b.x / cell) | 0) * 73856093 ^ ((b.y / cell) | 0) * 19349663;
-          let arr = grid.get(k);
-          if (!arr) grid.set(k, arr = []);
-          arr.push(i);
-        }
+        buildGrid(cell);
         // Kollisionen Kreis/Kreis
         for (let i = 0; i < bodies.length; i++) {
           const a = bodies[i];
-          const gx = (a.x / cell) | 0, gy = (a.y / cell) | 0;
-          for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
-            const arr = grid.get(((gx + ox) * 73856093) ^ ((gy + oy) * 19349663));
-            if (!arr) continue;
-            for (const j of arr) {
-              if (j <= i) continue;
-              const b = bodies[j];
-              let dx = b.x - a.x, dy = b.y - a.y;
-              const dist2 = dx * dx + dy * dy;
-              if (dist2 >= d2) continue;
-              let dist = Math.sqrt(dist2);
-              if (dist < 1e-6) { dx = Math.random() - 0.5; dy = -1; dist = Math.hypot(dx, dy); }
-              const push = (d - dist) * 0.5 / dist;
-              dx *= push; dy *= push;
-              a.x -= dx; a.y -= dy;
-              b.x += dx; b.y += dy;
-              // Rollen: tangentiale Bewegung erzeugt leichtes Drehen
-              const t = ((b.x - b.px) - (a.x - a.px)) * 0.002;
-              a.spin -= t; b.spin += t;
-            }
-          }
+          forNeighbors(a, cell, j => {
+            if (j <= i) return;
+            const b = bodies[j];
+            if (a.sleep && b.sleep) return;
+            let dx = b.x - a.x, dy = b.y - a.y;
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 >= d2) return;
+            let dist = Math.sqrt(dist2);
+            if (dist < 1e-6) { dx = Math.random() - 0.5; dy = -1; dist = Math.hypot(dx, dy); }
+            const corr = (d - dist) / dist;
+            // Schlafende Emojis sind unbeweglich, der wache Partner weicht ganz aus
+            const wa = a.sleep ? 0 : b.sleep ? 1 : 0.5;
+            const wb = 1 - wa;
+            a.x -= dx * corr * wa; a.y -= dy * corr * wa;
+            b.x += dx * corr * wb; b.y += dy * corr * wb;
+          });
         }
         // Wände
         for (const b of bodies) {
+          if (b.sleep) continue;
           if (b.y > H - r) {
             const vy = b.y - b.py;
             b.y = H - r;
             b.py = b.y + vy * RESTITUTION_WALL;
-            // Bodenreibung
+            // Bodenreibung, und rollen nur bei spürbarer Bewegung
             const vx = b.x - b.px;
             b.px = b.x - vx * FLOOR_FRICTION;
-            b.spin = vx / r / h * 0.5;
+            if (Math.abs(vx) > 0.05) b.spin = vx / r / h * 0.5;
           }
           if (b.x < r) {
             const vx = b.x - b.px;
@@ -321,6 +339,38 @@
             b.x = W - r; b.px = b.x + vx * RESTITUTION_WALL;
           }
           if (b.y < -H) { b.y = -H; b.py = b.y; }
+        }
+      }
+    }
+
+    if (g > 0) updateSleep(r, cell);
+  }
+
+  function updateSleep(r, cell) {
+    const d = r * 2, reach2 = (d * 1.08) ** 2;
+    buildGrid(cell);
+    for (const b of bodies) {
+      if (b.sleep) {
+        // Hat das schlafende Emoji noch Halt? (Boden, Wand oder Nachbarn darunter)
+        if (b.y >= H - r - 1) continue;
+        let left = b.x <= r + 1, right = b.x >= W - r - 1, under = false;
+        forNeighbors(b, cell, j => {
+          const o = bodies[j];
+          if (o === b || o.y <= b.y + r * 0.2) return;
+          const dx = o.x - b.x, dy = o.y - b.y;
+          if (dx * dx + dy * dy > reach2) return;
+          if (Math.abs(dx) < r * 0.35) under = true;
+          else if (dx < 0) left = true;
+          else right = true;
+        });
+        if (!(under || (left && right))) wake(b);
+      } else {
+        const moved = Math.hypot(b.x - b.fx, b.y - b.fy);
+        b.still = moved < SLEEP_MOVE ? b.still + 1 : 0;
+        if (b.still >= SLEEP_FRAMES) {
+          b.sleep = true;
+          b.px = b.x; b.py = b.y;
+          b.spin = 0;
         }
       }
     }
@@ -354,6 +404,7 @@
   });
 
   function shake(b) {
+    wake(b);
     b.px = b.x + (Math.random() - 0.5) * 6;
     b.py = b.y + 3;
   }
@@ -366,6 +417,7 @@
       const dx = o.x - b.x, dy = o.y - b.y, dd = dx * dx + dy * dy;
       const R = radius * 4;
       if (dd < R * R && dd > 0) {
+        wake(o);
         const f = (1 - Math.sqrt(dd) / R) * 2.5 / Math.sqrt(dd);
         o.px -= dx * f; o.py -= dy * f;
       }
