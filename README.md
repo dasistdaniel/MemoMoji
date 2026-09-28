@@ -2,9 +2,11 @@
 
 Ein kleines Browserspiel: Hunderte Emojis erscheinen in der Bildschirmmitte und fallen mit Schwerkraft nach unten. Klicke immer zwei gleiche an, damit sie verschwinden. Wenn alle weg sind, hast du gewonnen. Dein Score ist die Zeit, die du gebraucht hast.
 
-- 4 Schwierigkeitsstufen (80 bis 500 Emojis)
+- 3 Schwierigkeitsstufen (80, 200 und 350 Emojis)
+- Festes Spielfeld im Handy-Format (400 × 760) mit immer gleich großen Emojis, damit Zeiten auf allen Geräten vergleichbar sind
+- Spielfeld drehen: am Desktop mit ⟲/⟳ oder den Pfeiltasten (← →), am Handy durch Drehen des Geräts. Die Schwerkraft dreht sich mit
+- Konfetti beim Gewinnen
 - Eigene Physik: Verlet-Integration mit Kreis-Kollisionen, ruhende Emojis „schlafen“, damit nichts zittert
-- Funktioniert auf Desktop und Handy (auch beim Drehen)
 - Lokale Bestzeiten pro Stufe, mit Server zusätzlich eine gemeinsame Bestenliste
 
 ## Ohne Server spielen

@@ -12,6 +12,7 @@
     --panel: #ffffffee;
     --accent: #ff7a1a;
     --line: #1a1f2622;
+    --board: #f8fafc;
     --shadow: 0 10px 40px #1a1f2622;
   }
   @media (prefers-color-scheme: dark) {
@@ -22,6 +23,7 @@
       --muted: #9aa3ae;
       --panel: #232830ee;
       --line: #eef1f526;
+      --board: #1d2129;
       --shadow: 0 10px 40px #0008;
     }
   }
@@ -32,6 +34,7 @@
     --muted: #9aa3ae;
     --panel: #232830ee;
     --line: #eef1f526;
+    --board: #1d2129;
     --shadow: 0 10px 40px #0008;
   }
   * { box-sizing: border-box; }
@@ -54,6 +57,13 @@
   }
   #hud b { font-weight: 700; }
   #hud .sel { font-size: 24px; min-width: 28px; text-align: center; }
+  #fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; cursor: default; }
+  #hud .rot {
+    pointer-events: auto; width: 34px; height: 34px; padding: 0; border-radius: 50%;
+    font-size: 20px; line-height: 1; background: transparent; color: var(--fg);
+    box-shadow: inset 0 0 0 2px var(--line);
+  }
+  #hud .rot:hover { background: var(--line); filter: none; }
   .overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: #0004; backdrop-filter: blur(3px);
@@ -105,9 +115,11 @@
 <canvas id="c"></canvas>
 
 <div id="hud" hidden>
+  <button class="rot" id="rotL" title="Spielfeld nach links drehen (←)" aria-label="Spielfeld nach links drehen">⟲</button>
   <span>⏱ <b id="time">0.0</b>s</span>
   <span>🧩 <b id="left">0</b></span>
   <span class="sel" id="sel"></span>
+  <button class="rot" id="rotR" title="Spielfeld nach rechts drehen (→)" aria-label="Spielfeld nach rechts drehen">⟳</button>
 </div>
 
 <div class="overlay" id="menu">
@@ -143,6 +155,8 @@
   </div>
 </div>
 
+<canvas id="fx"></canvas>
+
 <script>
 (() => {
   "use strict";
@@ -152,7 +166,6 @@
     { name: "Leicht",  pairs: 40 },
     { name: "Mittel",  pairs: 100 },
     { name: "Schwer",  pairs: 175 },
-    { name: "Irre",    pairs: 250 },
   ];
 
   const EMOJI_STRING = "😀😂🥹😍🤩😎🥳😡🥶🤢👻💀👽🤖🎃😺🙈🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🐔🐧🐦🦆🦉🦇🐺🐗🐴🦄🐝🐛🦋🐌🐞🐢🐍🦖🐙🦑🦀🐡🐠🐬🐳🦈🐊🦓🦒🐘🦔🌵🌲🌴🍀🍁🍄🌷🌹🌻🌈⭐🌙☀️⚡🔥❄️💧🍎🍐🍊🍋🍌🍉🍇🍓🫐🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🌶️🌽🥕🥐🍞🧀🍔🍟🍕🌭🌮🍩🍪🎂🍭🍫🍿🧃☕⚽🏀🏈⚾🎾🏐🎱🏓🎯🎮🎲🧩🎸🎺🥁🚗🚕🚓🚑🚒🚜🚲🛵🚀🛸🚁⛵⚓🏠🏰🗽🎁🎈🎀💎🔔🔑🔒💡📚✏️📌✂️🧲🧪💊🪀🪁🧸👑🎩👓🧦👟💍❤️💜💚💙💛🧡🖤";
@@ -163,68 +176,126 @@
       : [...EMOJI_STRING].filter(c => c !== "\uFE0F")
   )];
 
-  const GRAVITY = 2200;      // px/s²
+  // Das Spielfeld ist eine feste "Welt" im Handy-Format. Sie wird auf den
+  // Bildschirm skaliert, damit das Spiel überall gleich ist.
+  const WORLD_W = 400, WORLD_H = 760;
+  const R = 10;              // Radius eines Emojis in Welt-Einheiten, immer gleich
+  const GRAVITY = 2200;      // Welt-Einheiten/s²
   const SUBSTEPS = 8;
   const ITERATIONS = 2;
   const DAMPING = 0.995;
   const RESTITUTION_WALL = 0.2;
   const FLOOR_FRICTION = 0.85;
   const DROP_DELAY = 900;    // ms, die Emojis schweben kurz in der Mitte
+  const ROTATE_MS = 650;     // Dauer der Drehanimation
 
   // ---------- Setup ----------
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
   const $ = id => document.getElementById(id);
-  let W = 0, H = 0, DPR = 1;
+  const finePointer = matchMedia("(pointer: fine)").matches;
+  let SW = 0, SH = 0, DPR = 1;       // Bildschirmgröße in CSS-Pixeln
   let bodies = [];
+  let colors = { board: "#fff", line: "#0002" };
+
+  // Ansicht: Drehwinkel (Bogenmaß, im Uhrzeigersinn) und Skalierung
+  const view = { angle: 0, from: 0, target: 0, t0: 0, scale: 1, cx: 0, cy: 0 };
+  const rotating = () => view.angle !== view.target;
+  // Nach dem Drehen noch kurz wach bleiben, damit der Haufen ausfließen kann
+  const settling = () => rotating() || performance.now() < view.t0 + ROTATE_MS + 1500;
+  const quarterTurns = a => ((Math.round(a / (Math.PI / 2)) % 4) + 4) % 4;
+
+  function fitScale(angle) {
+    const c = Math.abs(Math.cos(angle)), si = Math.abs(Math.sin(angle));
+    const bw = c * WORLD_W + si * WORLD_H, bh = si * WORLD_W + c * WORLD_H;
+    // Am Desktop Rand lassen und oben Platz für die Anzeige
+    const pad = finePointer ? 16 : 0, top = finePointer ? 64 : 0;
+    return Math.min((SW - 2 * pad) / bw, (SH - top - pad) / bh);
+  }
+
+  function updateView(now) {
+    if (rotating()) {
+      const k = Math.min(1, (now - view.t0) / ROTATE_MS);
+      const e = k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+      view.angle = k >= 1 ? view.target : view.from + (view.target - view.from) * e;
+    }
+    const top = finePointer ? 64 : 0, pad = finePointer ? 16 : 0;
+    // Desktop: gleiche Größe in jeder Lage, das Feld dreht sich ohne Zoom.
+    // Handy: der Bildschirm dreht sich mit, also passend zur aktuellen Lage.
+    view.scale = finePointer ? Math.min(fitScale(0), fitScale(Math.PI / 2)) : fitScale(view.target);
+    view.cx = SW / 2;
+    view.cy = top + (SH - top - pad) / 2;
+  }
+
+  function rotateBoard(dir) {
+    if (state !== "play" && state !== "hover") return;
+    view.from = view.angle;
+    view.target += dir * Math.PI / 2;
+    view.t0 = performance.now();
+    for (const b of bodies) wake(b);
+  }
+
+  function toWorld(x, y) {
+    const dx = x - view.cx, dy = y - view.cy;
+    const c = Math.cos(view.angle), si = Math.sin(view.angle);
+    return [(c * dx + si * dy) / view.scale + WORLD_W / 2, (-si * dx + c * dy) / view.scale + WORLD_H / 2];
+  }
+  function toScreen(x, y) {
+    const dx = (x - WORLD_W / 2) * view.scale, dy = (y - WORLD_H / 2) * view.scale;
+    const c = Math.cos(view.angle), si = Math.sin(view.angle);
+    return [view.cx + c * dx - si * dy, view.cy + si * dx + c * dy];
+  }
+
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement);
+    colors = { board: cs.getPropertyValue("--board").trim(), line: cs.getPropertyValue("--line").trim() };
+  }
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", readColors);
 
   function resize() {
-    const oldW = W, oldH = H;
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    W = window.innerWidth; H = window.innerHeight;
-    // Bei Drehung/Größenänderung: Emojis mitskalieren und Größe neu anpassen,
-    // damit der Haufen wieder vollständig auf den Bildschirm passt
-    if (oldW && oldH && bodies.length && (W !== oldW || H !== oldH)) {
-      const oldR = radius;
-      radius = radiusFor(bodies.length);
-      // Breite wird gestreckt, die Höhe über dem Boden so angepasst,
-      // dass die Fläche des Haufens ungefähr gleich bleibt
-      const sx = W / oldW, sy = (radius / oldR) ** 2 / sx;
-      for (const b of bodies) {
-        b.x = b.x * sx;
-        b.y = H - (oldH - b.y) * sy;
-        b.px = b.x; b.py = b.y;
-        wake(b);
+    SW = window.innerWidth; SH = window.innerHeight;
+    canvas.width = Math.round(SW * DPR);
+    canvas.height = Math.round(SH * DPR);
+    fx.width = canvas.width; fx.height = canvas.height;
+    // Handy: Beim Drehen des Geräts dreht sich das Spielfeld mit,
+    // die Emojis fallen dann zur neuen Unterseite.
+    if (!finePointer) {
+      const landscape = SW > SH;
+      if (landscape !== (quarterTurns(view.target) % 2 === 1)) {
+        const oa = screen.orientation ? screen.orientation.angle : window.orientation;
+        view.angle = view.target = view.from = landscape ? (oa === 270 || oa === -90 ? 1 : -1) * Math.PI / 2 : 0;
+        view.t0 = performance.now() - ROTATE_MS;
+        for (const b of bodies) wake(b);
       }
     }
-    canvas.width = Math.round(W * DPR);
-    canvas.height = Math.round(H * DPR);
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    sprites.clear();
+    // Sprites in der Auflösung der größten möglichen Darstellung
+    const res = Math.ceil(R * 2.3 * (finePointer ? Math.min(fitScale(0), fitScale(Math.PI / 2)) : Math.max(fitScale(0), fitScale(Math.PI / 2))) * DPR);
+    if (res !== spriteRes) { spriteRes = res; sprites.clear(); }
+    readColors();
   }
   window.addEventListener("resize", resize);
 
   // Emoji-Sprites vorrendern (viel schneller als fillText pro Frame)
   const sprites = new Map();
-  function sprite(emoji, r) {
-    const key = emoji + "|" + r;
-    let s = sprites.get(key);
+  let spriteRes = 0;
+  function sprite(emoji) {
+    let s = sprites.get(emoji);
     if (s) return s;
-    const size = Math.ceil(r * 2 * DPR * 1.15);
+    const size = spriteRes;
     s = document.createElement("canvas");
     s.width = s.height = size;
     const g = s.getContext("2d");
     g.textAlign = "center";
     g.textBaseline = "middle";
-    g.font = `${Math.floor(r * 1.75 * DPR)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
-    g.fillText(emoji, size / 2, size / 2 + r * 0.1 * DPR);
-    sprites.set(key, s);
+    g.font = `${Math.floor(size * 0.76)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    g.fillText(emoji, size / 2, size / 2 + size * 0.045);
+    sprites.set(emoji, s);
     return s;
   }
 
   // ---------- Spielzustand ----------
   let popping = [];
-  let radius = 20;
   let selected = null;
   let state = "menu";   // menu | hover | play | won
   let startTime = 0, dropAt = 0, elapsed = 0;
@@ -238,16 +309,9 @@
     return a;
   }
 
-  // Radius so wählen, dass n Emojis bequem in den Bildschirm passen
-  function radiusFor(n) {
-    return Math.max(10, Math.min(34, Math.sqrt((W * H * 0.38) / (n * 4))));
-  }
-
   function newGame(lvl) {
     level = lvl;
     const n = lvl.pairs * 2;
-    // Radius so wählen, dass alle Emojis bequem in den unteren Bereich passen
-    radius = radiusFor(n);
 
     // Emoji-Typen auswählen; bei vielen Paaren kommen Typen mehrfach (immer paarweise) vor
     const types = shuffle([...EMOJI_LIST]);
@@ -258,12 +322,12 @@
     }
     shuffle(deck);
 
-    // Mittig als kompakter Haufen anordnen
-    const d = radius * 2.02;
-    const cols = Math.max(1, Math.min(Math.floor((W * 0.8) / d), Math.ceil(Math.sqrt(n * 1.3))));
+    // Mittig als kompakter Block anordnen
+    const d = R * 2.02;
+    const cols = Math.max(1, Math.min(Math.floor((WORLD_W * 0.85) / d), Math.ceil(Math.sqrt(n * 1.3))));
     const rows = Math.ceil(n / cols);
-    const x0 = W / 2 - (cols - 1) * d / 2;
-    const y0 = H / 2 - (rows - 1) * d / 2;
+    const x0 = WORLD_W / 2 - (cols - 1) * d / 2;
+    const y0 = WORLD_H / 2 - (rows - 1) * d / 2;
     bodies = deck.map((emoji, i) => {
       const cx = x0 + (i % cols) * d + (Math.random() - 0.5) * 2;
       const cy = y0 + Math.floor(i / cols) * d + (Math.random() - 0.5) * 2;
@@ -271,7 +335,7 @@
         emoji, x: cx, y: cy,
         // kleiner Anfangsimpuls für ein natürliches Auseinanderfallen
         px: cx - (Math.random() - 0.5) * 0.12,
-        py: cy - (Math.random() - 0.3) * 0.08,
+        py: cy - (Math.random() - 0.5) * 0.12,
         rot: (Math.random() - 0.5) * 0.6,
         spin: 0, sleep: false, still: 0,
       };
@@ -284,14 +348,16 @@
     $("menu").hidden = true;
     $("win").hidden = true;
     $("hud").hidden = false;
+    for (const id of ["rotL", "rotR"]) $(id).hidden = !finePointer;
+    stopConfetti();
     updateHud();
   }
 
   // ---------- Physik (Verlet + Kreis-Kollision mit Raster) ----------
   // Ruhende Emojis "schlafen": Sie bewegen sich nicht mehr und wirken für
   // andere wie feste Körper. So zittert der Haufen nicht. Sie wachen auf,
-  // sobald ihnen der Halt darunter fehlt oder sie angestoßen werden.
-  const SLEEP_MOVE = 0.25;   // px pro Frame, darunter gilt ein Emoji als ruhig
+  // sobald ihnen der Halt fehlt, sie angestoßen werden oder das Feld sich dreht.
+  const SLEEP_MOVE = 0.25;   // Einheiten pro Frame, darunter gilt ein Emoji als ruhig
   const SLEEP_FRAMES = 15;   // so viele ruhige Frames bis zum Einschlafen
 
   const grid = new Map();
@@ -315,10 +381,21 @@
   }
   function wake(b) { b.sleep = false; b.still = 0; }
 
+  // Die vier Wände: Normale nach außen, und wie weit ein Emoji noch entfernt ist
+  const WALLS = [
+    { nx: 0, ny: 1, dist: b => WORLD_H - R - b.y },
+    { nx: 0, ny: -1, dist: b => b.y - R },
+    { nx: 1, ny: 0, dist: b => WORLD_W - R - b.x },
+    { nx: -1, ny: 0, dist: b => b.x - R },
+  ];
+
   function step(dt) {
     const h = dt / SUBSTEPS;
     const g = state === "hover" ? 0 : GRAVITY;
-    const r = radius, d = r * 2, d2 = d * d;
+    // Schwerkraft zeigt auf dem Bildschirm immer nach unten, in der Welt also gedreht
+    const ux = Math.sin(view.angle), uy = Math.cos(view.angle);
+    const gx = g * ux * h * h, gy = g * uy * h * h;
+    const r = R, d = r * 2, d2 = d * d;
     const cell = d;
     const maxV = r * 0.35;
 
@@ -334,8 +411,8 @@
         const v = Math.hypot(vx, vy);
         if (v > maxV) { vx *= maxV / v; vy *= maxV / v; }
         b.px = b.x; b.py = b.y;
-        b.x += vx;
-        b.y += vy + g * h * h;
+        b.x += vx + gx;
+        b.y += vy + gy;
         b.rot += b.spin * h;
         b.spin *= 0.99;
       }
@@ -362,48 +439,56 @@
             b.x += dx * corr * wb; b.y += dy * corr * wb;
           });
         }
-        // Wände
+        // Wände: abprallen, und Reibung auf der Wand, die gerade "Boden" ist
         for (const b of bodies) {
           if (b.sleep) continue;
-          if (b.y > H - r) {
-            const vy = b.y - b.py;
-            b.y = H - r;
-            b.py = b.y + vy * RESTITUTION_WALL;
-            // Bodenreibung, und rollen nur bei spürbarer Bewegung
-            const vx = b.x - b.px;
-            b.px = b.x - vx * FLOOR_FRICTION;
-            if (Math.abs(vx) > 0.05) b.spin = vx / r / h * 0.5;
+          for (const w of WALLS) {
+            const pen = -w.dist(b);
+            if (pen <= 0) continue;
+            b.x -= w.nx * pen; b.y -= w.ny * pen;
+            const vx = b.x - b.px, vy = b.y - b.py;
+            const vn = vx * w.nx + vy * w.ny;            // in die Wand hinein
+            const tx = -w.ny, ty = w.nx;
+            let vt = vx * tx + vy * ty;                   // entlang der Wand
+            const isFloor = w.nx * ux + w.ny * uy > 0.5;
+            if (isFloor) {
+              vt *= FLOOR_FRICTION;
+              if (Math.abs(vt) > 0.05) b.spin = vt / r / h * 0.5;
+            }
+            const nvn = vn > 0 ? -vn * RESTITUTION_WALL : vn;
+            const nvx = w.nx * nvn + tx * vt, nvy = w.ny * nvn + ty * vt;
+            b.px = b.x - nvx; b.py = b.y - nvy;
           }
-          if (b.x < r) {
-            const vx = b.x - b.px;
-            b.x = r; b.px = b.x + vx * RESTITUTION_WALL;
-          } else if (b.x > W - r) {
-            const vx = b.x - b.px;
-            b.x = W - r; b.px = b.x + vx * RESTITUTION_WALL;
-          }
-          if (b.y < -H) { b.y = -H; b.py = b.y; }
         }
       }
     }
 
-    if (g > 0) updateSleep(r, cell);
+    if (g > 0) updateSleep(ux, uy);
   }
 
-  function updateSleep(r, cell) {
-    const d = r * 2, reach2 = (d * 1.08) ** 2;
+  function updateSleep(ux, uy) {
+    const r = R, d = r * 2, reach2 = (d * 1.08) ** 2, cell = d;
+    const px = -uy, py = ux;    // quer zur Schwerkraft
+    if (settling()) { for (const b of bodies) wake(b); return; }
     buildGrid(cell);
     for (const b of bodies) {
       if (b.sleep) {
         // Hat das schlafende Emoji noch Halt? (Boden, Wand oder Nachbarn darunter)
-        if (b.y >= H - r - 1) continue;
-        let left = b.x <= r + 1, right = b.x >= W - r - 1, under = false;
-        forNeighbors(b, cell, j => {
+        let under = false, left = false, right = false;
+        for (const w of WALLS) {
+          if (w.dist(b) > 1) continue;
+          const down = w.nx * ux + w.ny * uy;
+          if (down > 0.5) under = true;
+          else if (down > -0.5) (w.nx * px + w.ny * py < 0 ? (left = true) : (right = true));
+        }
+        if (!under) forNeighbors(b, cell, j => {
           const o = bodies[j];
-          if (o === b || o.y <= b.y + r * 0.2) return;
+          if (o === b) return;
           const dx = o.x - b.x, dy = o.y - b.y;
-          if (dx * dx + dy * dy > reach2) return;
-          if (Math.abs(dx) < r * 0.35) under = true;
-          else if (dx < 0) left = true;
+          if (dx * ux + dy * uy <= r * 0.2 || dx * dx + dy * dy > reach2) return;
+          const across = dx * px + dy * py;
+          if (Math.abs(across) < r * 0.35) under = true;
+          else if (across < 0) left = true;
           else right = true;
         });
         if (!(under || (left && right))) wake(b);
@@ -422,8 +507,8 @@
   // ---------- Eingabe ----------
   canvas.addEventListener("pointerdown", e => {
     if (state !== "play" && state !== "hover") return;
-    const x = e.clientX, y = e.clientY;
-    let best = null, bestD = (radius * (e.pointerType === "touch" ? 1.5 : 1.1)) ** 2;
+    const [x, y] = toWorld(e.clientX, e.clientY);
+    let best = null, bestD = (R * (e.pointerType === "touch" ? 1.5 : 1.1)) ** 2;
     for (const b of bodies) {
       const dd = (b.x - x) ** 2 + (b.y - y) ** 2;
       if (dd < bestD) { bestD = dd; best = b; }
@@ -446,10 +531,18 @@
     updateHud();
   });
 
+  $("rotL").onclick = () => rotateBoard(-1);
+  $("rotR").onclick = () => rotateBoard(1);
+  window.addEventListener("keydown", e => {
+    if (e.target instanceof HTMLInputElement) return;
+    if (e.key === "ArrowLeft" || e.key === "q") rotateBoard(-1);
+    else if (e.key === "ArrowRight" || e.key === "e") rotateBoard(1);
+  });
+
   function shake(b) {
     wake(b);
     b.px = b.x + (Math.random() - 0.5) * 6;
-    b.py = b.y + 3;
+    b.py = b.y + (Math.random() - 0.5) * 6;
   }
 
   function remove(b) {
@@ -458,13 +551,65 @@
     // Nachbarn einen kleinen Stoß geben
     for (const o of bodies) {
       const dx = o.x - b.x, dy = o.y - b.y, dd = dx * dx + dy * dy;
-      const R = radius * 4;
-      if (dd < R * R && dd > 0) {
+      const RR = R * 4;
+      if (dd < RR * RR && dd > 0) {
         wake(o);
-        const f = (1 - Math.sqrt(dd) / R) * 2.5 / Math.sqrt(dd);
+        const f = (1 - Math.sqrt(dd) / RR) * 2.5 / Math.sqrt(dd);
         o.px -= dx * f; o.py -= dy * f;
       }
     }
+  }
+
+  // ---------- Konfetti ----------
+  const fx = $("fx");
+  const fxCtx = fx.getContext("2d");
+  const CONFETTI_COLORS = ["#ff7a1a", "#ffd23f", "#3bceac", "#0ead69", "#ee4266", "#8e5fd8", "#4d9de0"];
+  let confetti = [];
+  function startConfetti() {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    confetti = [];
+    const n = Math.min(260, Math.round(SW * SH / 5000) + 80);
+    for (let i = 0; i < n; i++) {
+      const fromLeft = i % 2 === 0;
+      const ang = (fromLeft ? 1 : -1) * (0.25 + Math.random() * 0.45) - Math.PI / 2;
+      const speed = (0.9 + Math.random() * 0.8) * Math.max(SH, 500) * 1.35;
+      confetti.push({
+        x: fromLeft ? -10 : SW + 10, y: SH * (0.75 + Math.random() * 0.2),
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        w: 6 + Math.random() * 6, h: 8 + Math.random() * 8,
+        rot: Math.random() * 6.3, vr: (Math.random() - 0.5) * 14,
+        flip: Math.random() * 6.3, vf: 6 + Math.random() * 10,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        delay: Math.random() * 0.35,
+      });
+    }
+  }
+  function stopConfetti() {
+    confetti = [];
+    fxCtx.setTransform(1, 0, 0, 1, 0, 0);
+    fxCtx.clearRect(0, 0, fx.width, fx.height);
+  }
+  function drawConfetti(dt) {
+    if (!confetti.length) return;
+    fxCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    fxCtx.clearRect(0, 0, SW, SH);
+    for (const c of confetti) {
+      if (c.delay > 0) { c.delay -= dt; continue; }
+      c.vy += 1400 * dt;
+      c.vx *= 0.985; c.vy *= 0.985;
+      c.x += c.vx * dt; c.y += c.vy * dt;
+      c.rot += c.vr * dt; c.flip += c.vf * dt;
+      fxCtx.save();
+      fxCtx.translate(c.x, c.y);
+      fxCtx.rotate(c.rot);
+      fxCtx.scale(1, Math.cos(c.flip));
+      fxCtx.fillStyle = c.color;
+      fxCtx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+      fxCtx.restore();
+    }
+    confetti = confetti.filter(c => c.y < SH + 40);
+    if (!confetti.length) stopConfetti();
   }
 
   // ---------- Gemeinsame Bestenliste (nur wenn der Server erreichbar ist) ----------
@@ -599,6 +744,7 @@
       ? (prev === null ? `Erste Bestzeit auf „${level.name}“!` : `Neue Bestzeit! (vorher ${fmt(prev)} s)`)
       : `Bestzeit auf „${level.name}“: ${fmt(prev)} s`;
     finishOnlineGame();
+    startConfetti();
     setTimeout(() => { $("win").hidden = false; }, 600);
   }
 
@@ -618,17 +764,44 @@
     $("win").hidden = true;
     $("hud").hidden = true;
     $("menu").hidden = false;
+    stopConfetti();
   }
   $("again").onclick = showMenu;
 
   // ---------- Zeichnen ----------
+  function roundRect(c, x, y, w, h, rad) {
+    c.beginPath();
+    c.moveTo(x + rad, y);
+    c.arcTo(x + w, y, x + w, y + h, rad);
+    c.arcTo(x + w, y + h, x, y + h, rad);
+    c.arcTo(x, y + h, x, y, rad);
+    c.arcTo(x, y, x + w, y, rad);
+    c.closePath();
+  }
+
   function draw(now) {
-    ctx.clearRect(0, 0, W, H);
-    const r = radius;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, SW, SH);
+    ctx.translate(view.cx, view.cy);
+    ctx.rotate(view.angle);
+    ctx.scale(view.scale, view.scale);
+    ctx.translate(-WORLD_W / 2, -WORLD_H / 2);
+
+    // Spielfeld
+    roundRect(ctx, 0, 0, WORLD_W, WORLD_H, 18);
+    ctx.fillStyle = colors.board;
+    ctx.fill();
+    ctx.lineWidth = 1.5 / view.scale;
+    ctx.strokeStyle = colors.line;
+    ctx.stroke();
+
+    const r = R;
     const size = r * 2 * 1.15;
+    // Emojis bleiben auf dem Bildschirm aufrecht, auch wenn das Feld gedreht ist
+    const upright = -view.angle;
 
     for (const b of bodies) {
-      const sp = sprite(b.emoji, r);
+      const sp = sprite(b.emoji);
       ctx.save();
       ctx.translate(b.x, b.y);
       if (b === selected) {
@@ -637,23 +810,24 @@
         ctx.arc(0, 0, r * 1.08 * pulse, 0, Math.PI * 2);
         ctx.fillStyle = "#ff7a1a55";
         ctx.fill();
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.5 / view.scale;
         ctx.strokeStyle = "#ff7a1a";
         ctx.stroke();
         ctx.scale(1.12 * pulse, 1.12 * pulse);
       }
-      ctx.rotate(b.rot);
+      ctx.rotate(b.rot + upright);
       ctx.drawImage(sp, -size / 2, -size / 2, size, size);
       ctx.restore();
     }
 
     for (const p of popping) {
       const k = p.t;
-      const sp = sprite(p.emoji, r);
+      const sp = sprite(p.emoji);
       ctx.save();
       ctx.globalAlpha = 1 - k;
-      ctx.translate(p.x, p.y - k * 30);
-      ctx.rotate(p.rot + k * 2);
+      // nach oben auf dem Bildschirm wegschweben
+      ctx.translate(p.x - Math.sin(view.angle) * k * 30, p.y - Math.cos(view.angle) * k * 30);
+      ctx.rotate(p.rot + upright + k * 2);
       const s = size * (1 + k * 1.2);
       ctx.drawImage(sp, -s / 2, -s / 2, s, s);
       ctx.restore();
@@ -671,6 +845,7 @@
       startOnlineGame();
       startTime = now;
     }
+    updateView(now);
     if (state !== "menu") step(dt);
 
     for (const p of popping) p.t += dt * 2.5;
@@ -680,6 +855,7 @@
     else if (state === "hover") $("time").textContent = "0.0";
 
     draw(now);
+    drawConfetti(dt);
     requestAnimationFrame(frame);
   }
 
