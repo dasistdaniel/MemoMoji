@@ -11,6 +11,7 @@
     --muted: #5d6673;
     --panel: #ffffffee;
     --accent: #ff7a1a;
+    --line: #1a1f2622;
     --shadow: 0 10px 40px #1a1f2622;
   }
   @media (prefers-color-scheme: dark) {
@@ -20,6 +21,7 @@
       --fg: #eef1f5;
       --muted: #9aa3ae;
       --panel: #232830ee;
+      --line: #eef1f526;
       --shadow: 0 10px 40px #0008;
     }
   }
@@ -29,9 +31,11 @@
     --fg: #eef1f5;
     --muted: #9aa3ae;
     --panel: #232830ee;
+    --line: #eef1f526;
     --shadow: 0 10px 40px #0008;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body {
     margin: 0; height: 100%; overflow: hidden;
     background: var(--bg); color: var(--fg);
@@ -71,6 +75,29 @@
   button:hover { filter: brightness(1.08); }
   button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
   button small { font-weight: 400; opacity: .85; }
+  button.ghost { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 2px var(--line); }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 12px; }
+  .tabs button { padding: 6px 12px; font-size: 15px; }
+  .tabs button[aria-pressed="false"] { background: transparent; color: var(--fg); box-shadow: inset 0 0 0 2px var(--line); }
+  ol.scores {
+    list-style: none; margin: 0 0 16px; padding: 0; text-align: left;
+    font-variant-numeric: tabular-nums; min-width: min(300px, 70vw);
+  }
+  ol.scores li { display: flex; gap: 10px; padding: 5px 4px; border-bottom: 1px solid var(--line); }
+  ol.scores li:last-child { border-bottom: 0; }
+  ol.scores .rank { width: 2ch; color: var(--muted); text-align: right; }
+  ol.scores .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  ol.scores li.me { color: var(--accent); font-weight: 700; }
+  ol.scores li.empty { color: var(--muted); justify-content: center; border: 0; }
+  form.submit { display: flex; gap: 8px; margin: 0 0 16px; }
+  form.submit input {
+    flex: 1; min-width: 0; font: inherit; font-size: 17px; padding: 10px 12px;
+    border-radius: 12px; border: 2px solid var(--line); background: var(--bg); color: var(--fg);
+    user-select: text; -webkit-user-select: text;
+  }
+  form.submit input:focus { outline: none; border-color: var(--accent); }
+  .msg { min-height: 1.2em; }
+  .card .actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .big { font-size: 44px; font-weight: 800; margin: 8px 0; font-variant-numeric: tabular-nums; }
 </style>
 </head>
@@ -88,6 +115,16 @@
     <h1>🎲 MemoMoji</h1>
     <p>Die Emojis purzeln herunter. Klicke immer zwei <b>gleiche</b> an, um sie verschwinden zu lassen. Räum alles ab – so schnell du kannst!</p>
     <div class="levels" id="levels"></div>
+    <p class="actions" style="margin:12px 0 0"><button class="ghost" id="boardBtn" hidden>🏆 Bestenliste</button></p>
+  </div>
+</div>
+
+<div class="overlay" id="board" hidden>
+  <div class="card">
+    <h1>🏆 Bestenliste</h1>
+    <div class="tabs" id="boardTabs"></div>
+    <ol class="scores" id="boardList"></ol>
+    <button id="boardClose">Zurück</button>
   </div>
 </div>
 
@@ -96,6 +133,12 @@
     <h1>🎉 Geschafft!</h1>
     <div class="big" id="winTime"></div>
     <p id="winBest"></p>
+    <form class="submit" id="submitForm" hidden>
+      <input id="nameInput" maxlength="20" placeholder="Dein Name" autocomplete="nickname" aria-label="Dein Name für die Bestenliste">
+      <button type="submit">Eintragen</button>
+    </form>
+    <p class="msg" id="submitMsg" hidden></p>
+    <ol class="scores" id="winList" hidden></ol>
     <button id="again">Nochmal spielen</button>
   </div>
 </div>
@@ -424,6 +467,113 @@
     }
   }
 
+  // ---------- Gemeinsame Bestenliste (nur wenn der Server erreichbar ist) ----------
+  // Wird index.html direkt geöffnet, bleibt online = false und es gibt nur lokale Bestzeiten.
+  let online = false;
+  let gameId = null, gameSeq = 0;
+
+  async function api(path, body) {
+    const res = await fetch("api/" + path, body === undefined ? {} : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Server nicht erreichbar");
+    return data;
+  }
+
+  if (location.protocol === "http:" || location.protocol === "https:") {
+    api("health").then(d => { online = !!d.ok; $("boardBtn").hidden = !online; }).catch(() => {});
+  }
+
+  function startOnlineGame() {
+    gameId = null;
+    const seq = ++gameSeq;
+    if (!online) return;
+    api("games", { level: level.pairs })
+      .then(d => { if (seq === gameSeq) gameId = d.id; })
+      .catch(() => {});
+  }
+
+  function renderScores(ol, scores, highlight) {
+    ol.replaceChildren();
+    if (!scores.length) {
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "Noch keine Einträge – sei die erste Person!";
+      ol.append(li);
+    }
+    scores.forEach((s, i) => {
+      const li = document.createElement("li");
+      if (highlight && s.name.toLowerCase() === highlight.toLowerCase()) li.className = "me";
+      const rank = document.createElement("span"); rank.className = "rank"; rank.textContent = i + 1;
+      const who = document.createElement("span"); who.className = "who"; who.textContent = s.name;
+      const t = document.createElement("span"); t.textContent = fmt(s.ms) + " s";
+      li.append(rank, who, t);
+      ol.append(li);
+    });
+    ol.hidden = false;
+  }
+
+  function savedName() { try { return localStorage.getItem("memomoji-name") || ""; } catch { return ""; } }
+
+  async function finishOnlineGame() {
+    const form = $("submitForm"), msg = $("submitMsg");
+    form.hidden = true; msg.hidden = true; $("winList").hidden = true;
+    if (!online || !gameId) return;
+    const id = gameId;
+    try {
+      const d = await api(`games/${id}/finish`, {});
+      if (!d.valid) return;
+      $("nameInput").value = savedName();
+      form.hidden = false;
+      form.onsubmit = async ev => {
+        ev.preventDefault();
+        const name = $("nameInput").value.trim();
+        if (!name) { $("nameInput").focus(); return; }
+        form.querySelector("button").disabled = true;
+        try {
+          const r = await api("scores", { id, name });
+          try { localStorage.setItem("memomoji-name", r.name); } catch {}
+          form.hidden = true;
+          msg.textContent = `Platz ${r.rank} auf „${level.name}“ mit ${fmt(r.ms)} s`;
+          msg.hidden = false;
+          renderScores($("winList"), r.scores, r.name);
+        } catch (e) {
+          msg.textContent = e.message;
+          msg.hidden = false;
+        } finally {
+          form.querySelector("button").disabled = false;
+        }
+      };
+    } catch {}
+  }
+
+  let boardLevel = LEVELS[1];
+  async function showBoard(lvl) {
+    boardLevel = lvl;
+    const tabs = $("boardTabs");
+    tabs.replaceChildren(...LEVELS.map(l => {
+      const b = document.createElement("button");
+      b.textContent = l.name;
+      b.setAttribute("aria-pressed", String(l === lvl));
+      b.onclick = () => showBoard(l);
+      return b;
+    }));
+    $("menu").hidden = true;
+    $("board").hidden = false;
+    const ol = $("boardList");
+    try {
+      const d = await api("scores?level=" + lvl.pairs);
+      if (boardLevel === lvl) renderScores(ol, d.scores, savedName());
+    } catch (e) {
+      ol.replaceChildren(Object.assign(document.createElement("li"), { className: "empty", textContent: e.message }));
+    }
+  }
+  $("boardBtn").onclick = () => showBoard(boardLevel);
+  $("boardClose").onclick = () => { $("board").hidden = true; $("menu").hidden = false; };
+
   // ---------- Ablauf ----------
   function fmt(ms) { return (ms / 1000).toFixed(1); }
 
@@ -448,6 +598,7 @@
     $("winBest").textContent = isBest
       ? (prev === null ? `Erste Bestzeit auf „${level.name}“!` : `Neue Bestzeit! (vorher ${fmt(prev)} s)`)
       : `Bestzeit auf „${level.name}“: ${fmt(prev)} s`;
+    finishOnlineGame();
     setTimeout(() => { $("win").hidden = false; }, 600);
   }
 
@@ -517,6 +668,7 @@
 
     if (state === "hover" && now >= dropAt) {
       state = "play";
+      startOnlineGame();
       startTime = now;
     }
     if (state !== "menu") step(dt);

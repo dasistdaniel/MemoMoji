@@ -1,0 +1,13 @@
+services:
+  memomoji:
+    build: .
+    container_name: memomoji
+    restart: unless-stopped
+    ports:
+      # Nur lokal erreichbar, der Reverse Proxy leitet weiter
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - memomoji-data:/data
+
+volumes:
+  memomoji-data:
