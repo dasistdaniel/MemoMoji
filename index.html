@@ -133,10 +133,26 @@
   const ctx = canvas.getContext("2d");
   const $ = id => document.getElementById(id);
   let W = 0, H = 0, DPR = 1;
+  let bodies = [];
 
   function resize() {
+    const oldW = W, oldH = H;
     DPR = Math.min(window.devicePixelRatio || 1, 2);
     W = window.innerWidth; H = window.innerHeight;
+    // Bei Drehung/Größenänderung: Emojis mitskalieren und Größe neu anpassen,
+    // damit der Haufen wieder vollständig auf den Bildschirm passt
+    if (oldW && oldH && bodies.length && (W !== oldW || H !== oldH)) {
+      const oldR = radius;
+      radius = radiusFor(bodies.length);
+      // Breite wird gestreckt, die Höhe über dem Boden so angepasst,
+      // dass die Fläche des Haufens ungefähr gleich bleibt
+      const sx = W / oldW, sy = (radius / oldR) ** 2 / sx;
+      for (const b of bodies) {
+        b.x = b.x * sx;
+        b.y = H - (oldH - b.y) * sy;
+        b.px = b.x; b.py = b.y;
+      }
+    }
     canvas.width = Math.round(W * DPR);
     canvas.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -163,7 +179,6 @@
   }
 
   // ---------- Spielzustand ----------
-  let bodies = [];
   let popping = [];
   let radius = 20;
   let selected = null;
@@ -179,11 +194,16 @@
     return a;
   }
 
+  // Radius so wählen, dass n Emojis bequem in den Bildschirm passen
+  function radiusFor(n) {
+    return Math.max(10, Math.min(34, Math.sqrt((W * H * 0.38) / (n * 4))));
+  }
+
   function newGame(lvl) {
     level = lvl;
     const n = lvl.pairs * 2;
     // Radius so wählen, dass alle Emojis bequem in den unteren Bereich passen
-    radius = Math.max(11, Math.min(34, Math.sqrt((W * H * 0.42) / (n * 4))));
+    radius = radiusFor(n);
 
     // Emoji-Typen auswählen; bei vielen Paaren kommen Typen mehrfach (immer paarweise) vor
     const types = shuffle([...EMOJI_LIST]);
@@ -230,12 +250,16 @@
     const g = state === "hover" ? 0 : GRAVITY;
     const r = radius, d = r * 2, d2 = d * d;
     const cell = d;
+    const maxV = r * 0.35;
 
     for (let s = 0; s < SUBSTEPS; s++) {
       // Integration
       for (const b of bodies) {
-        const vx = (b.x - b.px) * DAMPING;
-        const vy = (b.y - b.py) * DAMPING;
+        let vx = (b.x - b.px) * DAMPING;
+        let vy = (b.y - b.py) * DAMPING;
+        // Geschwindigkeit begrenzen, damit Überlappungen nicht "explodieren"
+        const v = Math.hypot(vx, vy);
+        if (v > maxV) { vx *= maxV / v; vy *= maxV / v; }
         b.px = b.x; b.py = b.y;
         b.x += vx;
         b.y += vy + g * h * h;
@@ -306,7 +330,7 @@
   canvas.addEventListener("pointerdown", e => {
     if (state !== "play" && state !== "hover") return;
     const x = e.clientX, y = e.clientY;
-    let best = null, bestD = (radius * 1.1) ** 2;
+    let best = null, bestD = (radius * (e.pointerType === "touch" ? 1.5 : 1.1)) ** 2;
     for (const b of bodies) {
       const dd = (b.x - x) ** 2 + (b.y - y) ** 2;
       if (dd < bestD) { bestD = dd; best = b; }
