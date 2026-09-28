@@ -30,14 +30,23 @@ location /memomoji/ {
 
 **Update:** `git pull && docker compose up -d --build`
 
-**Per SSH deployen und prüfen** (vom eigenen Rechner aus, im Repo-Ordner):
+**Per SSH deployen und prüfen** (vom eigenen Rechner aus, im Repo-Ordner). Auf dem Server brauchst du nur Docker, git ist dort nicht nötig.
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 daniel@192.168.178.20 /home/daniel/memomoji
+powershell -ExecutionPolicy Bypass -File scripts\smoketest.ps1 http://192.168.178.20:8080
+```
+
+Linux/macOS:
 
 ```sh
 scripts/deploy.sh daniel@192.168.178.20 /home/daniel/memomoji
 scripts/smoketest.sh http://192.168.178.20:8080
 ```
 
-`deploy.sh` überträgt den aktuellen Commit per `git archive` + `ssh` und startet `docker compose`. Beim ersten Mal legt es eine `.env` aus `.env.example` an. Damit der Container direkt im LAN erreichbar ist (ohne Reverse Proxy), in der `.env` auf dem Server `MEMOMOJI_BIND=0.0.0.0` setzen. `smoketest.sh` prüft Spielseite, Bestenliste, Zeitprüfung und Admin-Schutz, ohne etwas einzutragen.
+Das Deploy-Skript überträgt den aktuellen Commit (nicht gespeicherte oder nicht committete Änderungen also nicht) per `ssh`/`scp` und startet `docker compose`. Beim ersten Mal legt es auf dem Server eine `.env` aus `.env.example` an. Damit der Container direkt im LAN erreichbar ist (ohne Reverse Proxy), dort `MEMOMOJI_BIND=0.0.0.0` setzen und das Deploy-Skript nochmal ausführen. Der Smoke-Test prüft Spielseite, Bestenliste, Zeitprüfung und Admin-Schutz, ohne etwas einzutragen.
 
 ### Wie die Zeiten geprüft werden
 
