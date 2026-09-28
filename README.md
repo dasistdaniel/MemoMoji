@@ -30,6 +30,15 @@ location /memomoji/ {
 
 **Update:** `git pull && docker compose up -d --build`
 
+**Per SSH deployen und prüfen** (vom eigenen Rechner aus, im Repo-Ordner):
+
+```sh
+scripts/deploy.sh daniel@192.168.178.20 /home/daniel/memomoji
+scripts/smoketest.sh http://192.168.178.20:8080
+```
+
+`deploy.sh` überträgt den aktuellen Commit per `git archive` + `ssh` und startet `docker compose`. Beim ersten Mal legt es eine `.env` aus `.env.example` an. Damit der Container direkt im LAN erreichbar ist (ohne Reverse Proxy), in der `.env` auf dem Server `MEMOMOJI_BIND=0.0.0.0` setzen. `smoketest.sh` prüft Spielseite, Bestenliste, Zeitprüfung und Admin-Schutz, ohne etwas einzutragen.
+
 ### Wie die Zeiten geprüft werden
 
 Die Zeit für die Bestenliste misst der Server, nicht der Browser: Beim Fallen der Emojis startet das Spiel eine Runde (`POST api/games`), beim Gewinnen beendet es sie (`POST api/games/<id>/finish`). Danach kann die Runde genau einmal mit einem Namen eingetragen werden (`POST api/scores`). Unrealistisch schnelle Zeiten (unter 0,2 s pro Paar) werden abgelehnt, und pro IP gibt es ein einfaches Rate-Limit. Ganz fälschungssicher ist das bei einem Browserspiel nicht, für eine Runde unter Freunden reicht es.

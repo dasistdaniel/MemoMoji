@@ -4,8 +4,9 @@ services:
     container_name: memomoji
     restart: unless-stopped
     ports:
-      # Nur lokal erreichbar, der Reverse Proxy leitet weiter
-      - "127.0.0.1:8080:8080"
+      # Standard: nur lokal erreichbar, der Reverse Proxy leitet weiter.
+      # Zum Testen im LAN in .env MEMOMOJI_BIND=0.0.0.0 setzen.
+      - "${MEMOMOJI_BIND:-127.0.0.1}:${MEMOMOJI_PORT:-8080}:8080"
     environment:
       # Passwort für die Admin-Seite (mind. 8 Zeichen), steht in der Datei .env.
       # Ist es leer, bleibt die Admin-Seite ausgeschaltet.
