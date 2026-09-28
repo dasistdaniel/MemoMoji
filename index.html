@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>MemoMoji</title>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --fg: #1d1b18;
+    --muted: #6b665c;
+    --panel: #ffffffee;
+    --accent: #ff7a1a;
+    --shadow: 0 10px 40px #0002;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17161a;
+      --fg: #f1efe9;
+      --muted: #a09c93;
+      --panel: #242329ee;
+      --shadow: 0 10px 40px #0008;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    user-select: none; -webkit-user-select: none;
+    touch-action: none;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: pointer; }
+  #hud {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 18px; align-items: center;
+    padding: 8px 18px; border-radius: 999px;
+    background: var(--panel); box-shadow: var(--shadow);
+    font-variant-numeric: tabular-nums; font-size: 18px; white-space: nowrap;
+    pointer-events: none;
+  }
+  #hud b { font-weight: 700; }
+  #hud .sel { font-size: 24px; min-width: 28px; text-align: center; }
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: #0004; backdrop-filter: blur(3px);
+  }
+  .overlay[hidden] { display: none; }
+  .card {
+    background: var(--panel); box-shadow: var(--shadow);
+    border-radius: 20px; padding: 28px 32px; text-align: center;
+    max-width: min(420px, calc(100vw - 32px));
+  }
+  .card h1 { margin: 0 0 6px; font-size: 34px; }
+  .card p { margin: 6px 0 18px; color: var(--muted); line-height: 1.4; }
+  .levels { display: grid; gap: 10px; }
+  button {
+    font: inherit; font-size: 17px; cursor: pointer;
+    border: 0; border-radius: 12px; padding: 12px 18px;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  button:hover { filter: brightness(1.08); }
+  button small { font-weight: 400; opacity: .85; }
+  .big { font-size: 44px; font-weight: 800; margin: 8px 0; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" hidden>
+  <span>⏱ <b id="time">0.0</b>s</span>
+  <span>🧩 <b id="left">0</b></span>
+  <span class="sel" id="sel"></span>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <h1>🎲 MemoMoji</h1>
+    <p>Die Emojis purzeln herunter. Klicke immer zwei <b>gleiche</b> an, um sie verschwinden zu lassen. Räum alles ab – so schnell du kannst!</p>
+    <div class="levels" id="levels"></div>
+  </div>
+</div>
+
+<div class="overlay" id="win" hidden>
+  <div class="card">
+    <h1>🎉 Geschafft!</h1>
+    <div class="big" id="winTime"></div>
+    <p id="winBest"></p>
+    <button id="again">Nochmal spielen</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- Konfiguration ----------
+  const LEVELS = [
+    { name: "Leicht",  pairs: 40 },
+    { name: "Mittel",  pairs: 100 },
+    { name: "Schwer",  pairs: 175 },
+    { name: "Irre",    pairs: 250 },
+  ];
+
+  const EMOJI_STRING = "😀😂🥹😍🤩😎🥳😡🥶🤢👻💀👽🤖🎃😺🙈🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🐔🐧🐦🦆🦉🦇🐺🐗🐴🦄🐝🐛🦋🐌🐞🐢🐍🦖🐙🦑🦀🐡🐠🐬🐳🦈🐊🦓🦒🐘🦔🌵🌲🌴🍀🍁🍄🌷🌹🌻🌈⭐🌙☀️⚡🔥❄️💧🍎🍐🍊🍋🍌🍉🍇🍓🫐🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🌶️🌽🥕🥐🍞🧀🍔🍟🍕🌭🌮🍩🍪🎂🍭🍫🍿🧃☕⚽🏀🏈⚾🎾🏐🎱🏓🎯🎮🎲🧩🎸🎺🥁🚗🚕🚓🚑🚒🚜🚲🛵🚀🛸🚁⛵⚓🏠🏰🗽🎁🎈🎀💎🔔🔑🔒💡📚✏️📌✂️🧲🧪💊🪀🪁🧸👑🎩👓🧦👟💍❤️💜💚💙💛🧡🖤";
+  // In einzelne Emojis zerlegen (inkl. Varianten-Selektoren wie bei ❤️)
+  const EMOJI_LIST = [...new Set(
+    typeof Intl !== "undefined" && Intl.Segmenter
+      ? [...new Intl.Segmenter().segment(EMOJI_STRING)].map(s => s.segment)
+      : [...EMOJI_STRING].filter(c => c !== "\uFE0F")
+  )];
+
+  const GRAVITY = 2200;      // px/s²
+  const SUBSTEPS = 8;
+  const ITERATIONS = 2;
+  const DAMPING = 0.995;
+  const RESTITUTION_WALL = 0.2;
+  const FLOOR_FRICTION = 0.85;
+  const DROP_DELAY = 900;    // ms, die Emojis schweben kurz in der Mitte
+
+  // ---------- Setup ----------
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const $ = id => document.getElementById(id);
+  let W = 0, H = 0, DPR = 1;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    sprites.clear();
+  }
+  window.addEventListener("resize", resize);
+
+  // Emoji-Sprites vorrendern (viel schneller als fillText pro Frame)
+  const sprites = new Map();
+  function sprite(emoji, r) {
+    const key = emoji + "|" + r;
+    let s = sprites.get(key);
+    if (s) return s;
+    const size = Math.ceil(r * 2 * DPR * 1.15);
+    s = document.createElement("canvas");
+    s.width = s.height = size;
+    const g = s.getContext("2d");
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.font = `${Math.floor(r * 1.75 * DPR)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    g.fillText(emoji, size / 2, size / 2 + r * 0.1 * DPR);
+    sprites.set(key, s);
+    return s;
+  }
+
+  // ---------- Spielzustand ----------
+  let bodies = [];
+  let popping = [];
+  let radius = 20;
+  let selected = null;
+  let state = "menu";   // menu | hover | play | won
+  let startTime = 0, dropAt = 0, elapsed = 0;
+  let level = LEVELS[0];
+
+  function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function newGame(lvl) {
+    level = lvl;
+    const n = lvl.pairs * 2;
+    // Radius so wählen, dass alle Emojis bequem in den unteren Bereich passen
+    radius = Math.max(11, Math.min(34, Math.sqrt((W * H * 0.42) / (n * 4))));
+
+    // Emoji-Typen auswählen; bei vielen Paaren kommen Typen mehrfach (immer paarweise) vor
+    const types = shuffle([...EMOJI_LIST]);
+    const deck = [];
+    for (let i = 0; i < lvl.pairs; i++) {
+      const e = types[i % types.length];
+      deck.push(e, e);
+    }
+    shuffle(deck);
+
+    // Mittig als kompakter Haufen anordnen
+    const d = radius * 2.02;
+    const cols = Math.max(1, Math.min(Math.floor((W * 0.8) / d), Math.ceil(Math.sqrt(n * 1.3))));
+    const rows = Math.ceil(n / cols);
+    const x0 = W / 2 - (cols - 1) * d / 2;
+    const y0 = H / 2 - (rows - 1) * d / 2;
+    bodies = deck.map((emoji, i) => {
+      const cx = x0 + (i % cols) * d + (Math.random() - 0.5) * 2;
+      const cy = y0 + Math.floor(i / cols) * d + (Math.random() - 0.5) * 2;
+      return {
+        emoji, x: cx, y: cy,
+        // kleiner Anfangsimpuls für ein natürliches Auseinanderfallen
+        px: cx - (Math.random() - 0.5) * 0.12,
+        py: cy - (Math.random() - 0.3) * 0.08,
+        rot: (Math.random() - 0.5) * 0.6,
+        spin: 0,
+      };
+    });
+    popping = [];
+    selected = null;
+    state = "hover";
+    dropAt = performance.now() + DROP_DELAY;
+    elapsed = 0;
+    $("menu").hidden = true;
+    $("win").hidden = true;
+    $("hud").hidden = false;
+    updateHud();
+  }
+
+  // ---------- Physik (Verlet + Kreis-Kollision mit Raster) ----------
+  const grid = new Map();
+  function step(dt) {
+    const h = dt / SUBSTEPS;
+    const g = state === "hover" ? 0 : GRAVITY;
+    const r = radius, d = r * 2, d2 = d * d;
+    const cell = d;
+
+    for (let s = 0; s < SUBSTEPS; s++) {
+      // Integration
+      for (const b of bodies) {
+        const vx = (b.x - b.px) * DAMPING;
+        const vy = (b.y - b.py) * DAMPING;
+        b.px = b.x; b.py = b.y;
+        b.x += vx;
+        b.y += vy + g * h * h;
+        b.rot += b.spin * h;
+        b.spin *= 0.995;
+      }
+
+      for (let it = 0; it < ITERATIONS; it++) {
+        // Raster aufbauen
+        grid.clear();
+        for (let i = 0; i < bodies.length; i++) {
+          const b = bodies[i];
+          const k = ((b.x / cell) | 0) * 73856093 ^ ((b.y / cell) | 0) * 19349663;
+          let arr = grid.get(k);
+          if (!arr) grid.set(k, arr = []);
+          arr.push(i);
+        }
+        // Kollisionen Kreis/Kreis
+        for (let i = 0; i < bodies.length; i++) {
+          const a = bodies[i];
+          const gx = (a.x / cell) | 0, gy = (a.y / cell) | 0;
+          for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+            const arr = grid.get(((gx + ox) * 73856093) ^ ((gy + oy) * 19349663));
+            if (!arr) continue;
+            for (const j of arr) {
+              if (j <= i) continue;
+              const b = bodies[j];
+              let dx = b.x - a.x, dy = b.y - a.y;
+              const dist2 = dx * dx + dy * dy;
+              if (dist2 >= d2) continue;
+              let dist = Math.sqrt(dist2);
+              if (dist < 1e-6) { dx = Math.random() - 0.5; dy = -1; dist = Math.hypot(dx, dy); }
+              const push = (d - dist) * 0.5 / dist;
+              dx *= push; dy *= push;
+              a.x -= dx; a.y -= dy;
+              b.x += dx; b.y += dy;
+              // Rollen: tangentiale Bewegung erzeugt leichtes Drehen
+              const t = ((b.x - b.px) - (a.x - a.px)) * 0.002;
+              a.spin -= t; b.spin += t;
+            }
+          }
+        }
+        // Wände
+        for (const b of bodies) {
+          if (b.y > H - r) {
+            const vy = b.y - b.py;
+            b.y = H - r;
+            b.py = b.y + vy * RESTITUTION_WALL;
+            // Bodenreibung
+            const vx = b.x - b.px;
+            b.px = b.x - vx * FLOOR_FRICTION;
+            b.spin = vx / r / h * 0.5;
+          }
+          if (b.x < r) {
+            const vx = b.x - b.px;
+            b.x = r; b.px = b.x + vx * RESTITUTION_WALL;
+          } else if (b.x > W - r) {
+            const vx = b.x - b.px;
+            b.x = W - r; b.px = b.x + vx * RESTITUTION_WALL;
+          }
+          if (b.y < -H) { b.y = -H; b.py = b.y; }
+        }
+      }
+    }
+  }
+
+  // ---------- Eingabe ----------
+  canvas.addEventListener("pointerdown", e => {
+    if (state !== "play" && state !== "hover") return;
+    const x = e.clientX, y = e.clientY;
+    let best = null, bestD = (radius * 1.1) ** 2;
+    for (const b of bodies) {
+      const dd = (b.x - x) ** 2 + (b.y - y) ** 2;
+      if (dd < bestD) { bestD = dd; best = b; }
+    }
+    if (!best) return;
+
+    if (!selected) {
+      selected = best;
+    } else if (selected === best) {
+      selected = null;
+    } else if (selected.emoji === best.emoji) {
+      remove(selected); remove(best);
+      selected = null;
+      if (bodies.length === 0) win();
+    } else {
+      // falsches Paar: neue Auswahl, kleines Wackeln als Feedback
+      shake(selected); shake(best);
+      selected = best;
+    }
+    updateHud();
+  });
+
+  function shake(b) {
+    b.px = b.x + (Math.random() - 0.5) * 6;
+    b.py = b.y + 3;
+  }
+
+  function remove(b) {
+    bodies.splice(bodies.indexOf(b), 1);
+    popping.push({ emoji: b.emoji, x: b.x, y: b.y, rot: b.rot, t: 0 });
+    // Nachbarn einen kleinen Stoß geben
+    for (const o of bodies) {
+      const dx = o.x - b.x, dy = o.y - b.y, dd = dx * dx + dy * dy;
+      const R = radius * 4;
+      if (dd < R * R && dd > 0) {
+        const f = (1 - Math.sqrt(dd) / R) * 2.5 / Math.sqrt(dd);
+        o.px -= dx * f; o.py -= dy * f;
+      }
+    }
+  }
+
+  // ---------- Ablauf ----------
+  function fmt(ms) { return (ms / 1000).toFixed(1); }
+
+  function updateHud() {
+    $("left").textContent = bodies.length / 2 | 0;
+    $("sel").textContent = selected ? selected.emoji : "";
+  }
+
+  function bestKey() { return "memomoji-best-" + level.pairs; }
+  function getBest() {
+    try { const v = parseFloat(localStorage.getItem(bestKey())); return isFinite(v) ? v : null; }
+    catch { return null; }
+  }
+
+  function win() {
+    state = "won";
+    elapsed = performance.now() - startTime;
+    const prev = getBest();
+    const isBest = prev === null || elapsed < prev;
+    if (isBest) { try { localStorage.setItem(bestKey(), String(elapsed)); } catch {} }
+    $("winTime").textContent = fmt(elapsed) + " s";
+    $("winBest").textContent = isBest
+      ? (prev === null ? `Erste Bestzeit auf „${level.name}“!` : `Neue Bestzeit! (vorher ${fmt(prev)} s)`)
+      : `Bestzeit auf „${level.name}“: ${fmt(prev)} s`;
+    setTimeout(() => { $("win").hidden = false; }, 600);
+  }
+
+  function showMenu() {
+    state = "menu";
+    const box = $("levels");
+    box.innerHTML = "";
+    for (const lvl of LEVELS) {
+      const btn = document.createElement("button");
+      const prevLevel = level; level = lvl;
+      const best = getBest();
+      level = prevLevel;
+      btn.innerHTML = `${lvl.name} <small>· ${lvl.pairs * 2} Emojis${best !== null ? ` · 🏆 ${fmt(best)} s` : ""}</small>`;
+      btn.onclick = () => newGame(lvl);
+      box.appendChild(btn);
+    }
+    $("win").hidden = true;
+    $("hud").hidden = true;
+    $("menu").hidden = false;
+  }
+  $("again").onclick = showMenu;
+
+  // ---------- Zeichnen ----------
+  function draw(now) {
+    ctx.clearRect(0, 0, W, H);
+    const r = radius;
+    const size = r * 2 * 1.15;
+
+    for (const b of bodies) {
+      const sp = sprite(b.emoji, r);
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      if (b === selected) {
+        const pulse = 1 + Math.sin(now / 120) * 0.06;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 1.08 * pulse, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff7a1a55";
+        ctx.fill();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#ff7a1a";
+        ctx.stroke();
+        ctx.scale(1.12 * pulse, 1.12 * pulse);
+      }
+      ctx.rotate(b.rot);
+      ctx.drawImage(sp, -size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
+
+    for (const p of popping) {
+      const k = p.t;
+      const sp = sprite(p.emoji, r);
+      ctx.save();
+      ctx.globalAlpha = 1 - k;
+      ctx.translate(p.x, p.y - k * 30);
+      ctx.rotate(p.rot + k * 2);
+      const s = size * (1 + k * 1.2);
+      ctx.drawImage(sp, -s / 2, -s / 2, s, s);
+      ctx.restore();
+    }
+  }
+
+  // ---------- Schleife ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(1 / 30, (now - last) / 1000);
+    last = now;
+
+    if (state === "hover" && now >= dropAt) {
+      state = "play";
+      startTime = now;
+    }
+    if (state !== "menu") step(dt);
+
+    for (const p of popping) p.t += dt * 2.5;
+    popping = popping.filter(p => p.t < 1);
+
+    if (state === "play") $("time").textContent = fmt(now - startTime);
+    else if (state === "hover") $("time").textContent = "0.0";
+
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  showMenu();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
