@@ -37,7 +37,7 @@
     --board: #1d2129;
     --shadow: 0 10px 40px #0008;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   [hidden] { display: none !important; }
   html, body {
     margin: 0; height: 100%; overflow: hidden;
@@ -65,6 +65,14 @@
   }
   #hud .rot:hover { background: var(--line); filter: none; }
   #hud .restart { pointer-events: auto; padding: 6px 12px; font-size: 15px; border-radius: 999px; }
+  @media (max-width: 440px) {
+    #hud { gap: 10px; padding: 6px 10px; font-size: 16px; }
+    #hud .restart { padding: 6px 10px; }
+  }
+  @media (max-width: 360px) {
+    #hud { gap: 7px; padding: 6px 8px; font-size: 15px; }
+    #hud .restart { padding: 5px 8px; font-size: 14px; }
+  }
   .overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: #0004; backdrop-filter: blur(3px);
@@ -122,6 +130,7 @@
   <span class="sel" id="sel"></span>
   <button class="rot" id="rotR" title="Spielfeld nach rechts drehen (→)" aria-label="Spielfeld nach rechts drehen">⟳</button>
   <button class="restart" id="restart" title="Neu starten (R)">Neu</button>
+  <button class="restart ghost" id="toMenu" title="Zurück zum Menü (Esc)">Menü</button>
 </div>
 
 <div class="overlay" id="menu">
@@ -344,6 +353,7 @@
     });
     popping = [];
     selected = null;
+    if (finePointer) view.angle = view.from = view.target = 0;
     state = "hover";
     dropAt = performance.now() + DROP_DELAY;
     elapsed = 0;
@@ -534,6 +544,7 @@
   });
 
   $("restart").onclick = () => newGame(level);
+  $("toMenu").onclick = showMenu;
   $("rotL").onclick = () => rotateBoard(-1);
   $("rotR").onclick = () => rotateBoard(1);
   window.addEventListener("keydown", e => {
@@ -541,6 +552,7 @@
     if (e.key === "ArrowLeft" || e.key === "q") rotateBoard(-1);
     else if (e.key === "ArrowRight" || e.key === "e") rotateBoard(1);
     else if (e.key === "r" && state !== "menu") newGame(level);
+    else if (e.key === "Escape" && state !== "menu") showMenu();
   });
 
   function shake(b) {
@@ -754,6 +766,8 @@
 
   function showMenu() {
     state = "menu";
+    bodies = []; popping = []; selected = null;
+    gameId = null; gameSeq++;
     const box = $("levels");
     box.innerHTML = "";
     for (const lvl of LEVELS) {
