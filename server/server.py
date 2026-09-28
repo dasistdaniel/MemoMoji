@@ -8,8 +8,17 @@ Ablauf einer Runde (die Zeit misst der Server, nicht der Browser):
   POST api/scores                 {"id": "...", "name": "Anna"}
                                                       -> {"rank": 3, "scores": [...]}
   GET  api/scores?level=100                           -> {"scores": [...]}
+
+Admin (nur wenn ADMIN_PASSWORD gesetzt ist, Seite unter .../admin):
+  POST   api/admin/login          {"password": "..."} -> {"token": "..."}
+  POST   api/admin/logout
+  GET    api/admin/scores?level=100                   -> alle Einträge der Stufe
+  DELETE api/admin/scores/<id>
+  POST   api/admin/delete-name    {"name": "..."}     -> löscht alle Einträge des Namens
+Admin-Anfragen schicken den Token als "Authorization: Bearer <token>".
 """
 
+import hmac
 import json
 import os
 import re
@@ -38,6 +47,17 @@ NAME_RE = re.compile(r"[\x00-\x1f\x7f<>]")
 # Einfaches Rate-Limit pro IP für schreibende Anfragen
 RATE_WINDOW_S = 60
 RATE_MAX = 30
+
+# Admin: Passwort aus der Umgebung, Sitzungen nur im Speicher
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_MIN_LEN = 8
+ADMIN_SESSION_S = 12 * 3600
+LOGIN_WINDOW_S = 15 * 60
+LOGIN_MAX_PER_IP = 5      # Fehlversuche pro IP im Zeitfenster
+LOGIN_MAX_TOTAL = 30      # Fehlversuche insgesamt im Zeitfenster, dann Sperre für alle
+admin_enabled = len(ADMIN_PASSWORD) >= ADMIN_MIN_LEN
+sessions = {}             # token -> Ablaufzeit
+failed_logins = []        # (zeit, ip)
 
 lock = threading.Lock()
 rate = {}
@@ -95,8 +115,22 @@ class Handler(BaseHTTPRequestHandler):
 
     # ----- Hilfen -----
     def client_ip(self):
+        # Der letzte Eintrag stammt vom eigenen Reverse Proxy; frühere Einträge
+        # kann der Client selbst mitschicken und damit fälschen.
         fwd = self.headers.get("X-Forwarded-For")
-        return fwd.split(",")[0].strip() if fwd else self.client_address[0]
+        return fwd.split(",")[-1].strip() if fwd else self.client_address[0]
+
+    def is_admin(self):
+        auth = self.headers.get("Authorization", "")
+        if not admin_enabled or not auth.startswith("Bearer "):
+            return False
+        token = auth[7:].strip()
+        now = time.time()
+        with lock:
+            for t, exp in list(sessions.items()):
+                if exp < now:
+                    del sessions[t]
+            return any(hmac.compare_digest(token, t) for t in sessions)
 
     def send_json(self, status, obj):
         body = json.dumps(obj).encode()
@@ -145,6 +179,22 @@ class Handler(BaseHTTPRequestHandler):
         api = self.api_path()
         if api is None:
             return self.serve_static()
+        if api == "/admin/scores":
+            if not self.is_admin():
+                return self.error(401, "Bitte neu anmelden")
+            q = parse_qs(urlsplit(self.path).query)
+            try:
+                level = int(q.get("level", [""])[0])
+            except ValueError:
+                return self.error(400, "Unbekannte Stufe")
+            with lock:
+                rows = db.execute(
+                    "SELECT id, name, ms, created FROM scores WHERE level = ? ORDER BY ms ASC LIMIT 2000",
+                    (level,),
+                ).fetchall()
+            return self.send_json(200, {
+                "scores": [{"id": r[0], "name": r[1], "ms": r[2], "created": r[3]} for r in rows]
+            })
         if api == "/health":
             return self.send_json(200, {"ok": True})
         if api == "/scores":
@@ -162,18 +212,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_static(self):
         path = urlsplit(self.path).path
-        if not (path.endswith("/") or path.endswith("/index.html")):
+        if path.endswith("/") and not path.endswith("/admin/") or path.endswith("/index.html"):
+            name = "index.html"
+        elif path.endswith(("/admin", "/admin/", "/admin.html")) and admin_enabled:
+            name = "admin.html"
+        else:
             return self.error(404, "Nicht gefunden")
         try:
-            with open(os.path.join(STATIC_DIR, "index.html"), "rb") as f:
+            with open(os.path.join(STATIC_DIR, name), "rb") as f:
                 body = f.read()
         except OSError:
-            return self.error(500, "index.html fehlt")
+            return self.error(500, name + " fehlt")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if name == "admin.html":
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                "connect-src 'self'; frame-ancestors 'none'; form-action 'none'",
+            )
+        else:
+            self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -182,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         api = self.api_path()
         if api is None:
             return self.error(404, "Nicht gefunden")
+        if api.startswith("/admin/"):
+            return self.admin_post(api)
         if self.rate_limited():
             return self.error(429, "Zu viele Anfragen, bitte kurz warten")
         data = self.read_json()
@@ -260,6 +326,71 @@ class Handler(BaseHTTPRequestHandler):
         self.error(404, "Nicht gefunden")
 
 
+    def admin_post(self, api):
+        if not admin_enabled:
+            return self.error(404, "Nicht gefunden")
+        data = self.read_json()
+        if data is None:
+            return self.error(400, "Ungültige Anfrage")
+
+        if api == "/admin/login":
+            ip, now = self.client_ip(), time.time()
+            with lock:
+                failed_logins[:] = [(t, i) for t, i in failed_logins if now - t < LOGIN_WINDOW_S]
+                if (len(failed_logins) >= LOGIN_MAX_TOTAL
+                        or sum(1 for _, i in failed_logins if i == ip) >= LOGIN_MAX_PER_IP):
+                    return self.error(429, "Zu viele Fehlversuche, bitte in 15 Minuten erneut versuchen")
+                pw = data.get("password")
+                if not isinstance(pw, str) or not hmac.compare_digest(
+                    pw.encode(), ADMIN_PASSWORD.encode()
+                ):
+                    failed_logins.append((now, ip))
+                    print(f"{ip} Admin-Anmeldung fehlgeschlagen", flush=True)
+                    return self.error(401, "Falsches Passwort")
+                token = secrets.token_urlsafe(32)
+                sessions[token] = now + ADMIN_SESSION_S
+            return self.send_json(200, {"token": token})
+
+        if not self.is_admin():
+            return self.error(401, "Bitte neu anmelden")
+
+        if api == "/admin/logout":
+            token = self.headers.get("Authorization", "")[7:].strip()
+            with lock:
+                sessions.pop(token, None)
+            return self.send_json(200, {"ok": True})
+
+        if api == "/admin/delete-name":
+            name = data.get("name")
+            if not isinstance(name, str) or not name.strip():
+                return self.error(400, "Name fehlt")
+            with lock, db:
+                n = db.execute(
+                    "DELETE FROM scores WHERE name = ? COLLATE NOCASE", (name.strip(),)
+                ).rowcount
+            print(f"{self.client_ip()} Admin: {n} Einträge von {name!r} gelöscht", flush=True)
+            return self.send_json(200, {"deleted": n})
+
+        self.error(404, "Nicht gefunden")
+
+    def do_DELETE(self):
+        api = self.api_path() or ""
+        m = re.fullmatch(r"/admin/scores/(\d+)", api)
+        if not m:
+            return self.error(404, "Nicht gefunden")
+        if not self.is_admin():
+            return self.error(401, "Bitte neu anmelden")
+        with lock, db:
+            n = db.execute("DELETE FROM scores WHERE id = ?", (int(m.group(1)),)).rowcount
+        if not n:
+            return self.error(404, "Eintrag nicht gefunden")
+        print(f"{self.client_ip()} Admin: Eintrag {m.group(1)} gelöscht", flush=True)
+        self.send_json(200, {"deleted": n})
+
+
 if __name__ == "__main__":
+    if ADMIN_PASSWORD and not admin_enabled:
+        print(f"ADMIN_PASSWORD ist kürzer als {ADMIN_MIN_LEN} Zeichen, Admin-Seite bleibt aus", flush=True)
+    print(f"Admin-Seite: {'an' if admin_enabled else 'aus (ADMIN_PASSWORD nicht gesetzt)'}", flush=True)
     print(f"MemoMoji läuft auf Port {PORT}, Datenbank: {DB_PATH}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

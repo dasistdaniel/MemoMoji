@@ -36,6 +36,26 @@ Die Zeit für die Bestenliste misst der Server, nicht der Browser: Beim Fallen d
 
 Die Bestenliste zeigt pro Stufe die 10 besten Namen, jeweils mit ihrer besten Zeit.
 
+### Admin-Seite
+
+Unter `…/admin` (z. B. `https://example.org/memomoji/admin`) kannst du Einträge ansehen und löschen: einzeln oder alle Einträge eines Namens auf einmal.
+
+Einschalten, indem du ein Passwort (mind. 8 Zeichen) in eine `.env`-Datei neben der `docker-compose.yml` schreibst:
+
+```sh
+cp .env.example .env
+# MEMOMOJI_ADMIN_PASSWORD=ein-langes-eigenes-passwort eintragen
+docker compose up -d
+```
+
+Ohne Passwort ist die Admin-Seite ausgeschaltet und liefert 404.
+
+- Nach dem Anmelden bleibt die Sitzung 12 Stunden gültig (nur in diesem Browser-Tab). Ein Neustart des Containers meldet alle ab.
+- Nach 5 falschen Passwörtern pro IP (oder 30 insgesamt) ist die Anmeldung für 15 Minuten gesperrt.
+- Fehlgeschlagene Anmeldungen und Löschungen stehen im Log: `docker compose logs memomoji`
+- Die Seite nur über HTTPS aufrufen, sonst geht das Passwort im Klartext übers Netz.
+- Der Server nimmt die IP für Sperren aus dem letzten Eintrag von `X-Forwarded-For`, also dem, den dein Reverse Proxy setzt. Der Proxy sollte den Header daher wie im nginx-Beispiel oben setzen.
+
 ### Datenbank
 
 ```sh
