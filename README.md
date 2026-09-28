@@ -6,6 +6,7 @@ Ein kleines Browserspiel: Hunderte Emojis erscheinen in der Bildschirmmitte und 
 - Festes Spielfeld im Handy-Format (400 × 760) mit immer gleich großen Emojis, damit Zeiten auf allen Geräten vergleichbar sind
 - Spielfeld drehen: am Desktop mit ⟲/⟳ oder den Pfeiltasten (← →), am Handy durch Drehen des Geräts. Die Schwerkraft dreht sich mit
 - Konfetti beim Gewinnen
+- „Neu“-Knopf (oder Taste R) startet die Stufe sofort neu
 - Eigene Physik: Verlet-Integration mit Kreis-Kollisionen, ruhende Emojis „schlafen“, damit nichts zittert
 - Lokale Bestzeiten pro Stufe, mit Server zusätzlich eine gemeinsame Bestenliste
 

@@ -64,6 +64,7 @@
     box-shadow: inset 0 0 0 2px var(--line);
   }
   #hud .rot:hover { background: var(--line); filter: none; }
+  #hud .restart { pointer-events: auto; padding: 6px 12px; font-size: 15px; border-radius: 999px; }
   .overlay {
     position: fixed; inset: 0; display: grid; place-items: center;
     background: #0004; backdrop-filter: blur(3px);
@@ -120,6 +121,7 @@
   <span>🧩 <b id="left">0</b></span>
   <span class="sel" id="sel"></span>
   <button class="rot" id="rotR" title="Spielfeld nach rechts drehen (→)" aria-label="Spielfeld nach rechts drehen">⟳</button>
+  <button class="restart" id="restart" title="Neu starten (R)">Neu</button>
 </div>
 
 <div class="overlay" id="menu">
@@ -531,12 +533,14 @@
     updateHud();
   });
 
+  $("restart").onclick = () => newGame(level);
   $("rotL").onclick = () => rotateBoard(-1);
   $("rotR").onclick = () => rotateBoard(1);
   window.addEventListener("keydown", e => {
     if (e.target instanceof HTMLInputElement) return;
     if (e.key === "ArrowLeft" || e.key === "q") rotateBoard(-1);
     else if (e.key === "ArrowRight" || e.key === "e") rotateBoard(1);
+    else if (e.key === "r" && state !== "menu") newGame(level);
   });
 
   function shake(b) {
