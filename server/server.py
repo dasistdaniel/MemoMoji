@@ -34,7 +34,7 @@ DB_PATH = os.environ.get("DB_PATH", "/data/memomoji.db")
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__), "..", "public"))
 
 # Anzahl Paare pro Stufe (muss zu LEVELS in index.html passen)
-LEVELS = {40, 75, 110}
+LEVELS = {40, 90, 140}
 # Schneller als das ist kein Mensch: Mindestzeit pro Paar in ms
 MIN_MS_PER_PAIR = 200
 # Unbeendete oder nicht eingetragene Runden werden nach dieser Zeit gelöscht
