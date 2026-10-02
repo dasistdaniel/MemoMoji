@@ -51,6 +51,18 @@ scripts/smoketest.sh http://192.168.178.20:8080
 
 Das Deploy-Skript überträgt den aktuellen Commit (nicht gespeicherte oder nicht committete Änderungen also nicht) per `ssh`/`scp` und startet `docker compose`. Beim ersten Mal legt es auf dem Server eine `.env` aus `.env.example` an. Damit der Container direkt im LAN erreichbar ist (ohne Reverse Proxy), dort `MEMOMOJI_BIND=0.0.0.0` setzen und das Deploy-Skript nochmal ausführen. Der Smoke-Test prüft Spielseite, Bestenliste, Zeitprüfung und Admin-Schutz, ohne etwas einzutragen.
 
+### Link-Vorschau beim Teilen (WhatsApp, Signal, Telegram, …)
+
+`index.html` enthält Open-Graph-Angaben mit Titel, Beschreibung und dem Bild `og-image.jpg` (1200 × 630, ca. 110 KB). Messenger brauchen dafür eine **absolute** Bild-URL, die der Server beim Ausliefern einsetzt. Am zuverlässigsten trägst du die öffentliche Adresse in die `.env` ein:
+
+```sh
+MEMOMOJI_PUBLIC_URL=https://example.org/memomoji/
+```
+
+Ohne diese Angabe leitet der Server die Adresse aus `Host`, `X-Forwarded-Proto` und `X-Forwarded-Prefix` ab. Das klappt nur, wenn der Reverse Proxy diese Header setzt.
+
+Prüfen: `curl -s https://example.org/memomoji/ | grep og:image` muss eine vollständige `https://…`-Adresse zeigen. WhatsApp speichert Vorschauen eine Weile zwischen. Nach einer Änderung hilft es, den Link einmal mit angehängtem `?v=2` zu teilen.
+
 ### Wie die Zeiten geprüft werden
 
 Die Zeit für die Bestenliste misst der Server, nicht der Browser: Beim Fallen der Emojis startet das Spiel eine Runde (`POST api/games`), beim Gewinnen beendet es sie (`POST api/games/<id>/finish`). Danach kann die Runde genau einmal mit einem Namen eingetragen werden (`POST api/scores`). Unrealistisch schnelle Zeiten (unter 0,2 s pro Paar) werden abgelehnt, und pro IP gibt es ein einfaches Rate-Limit. Ganz fälschungssicher ist das bei einem Browserspiel nicht, für eine Runde unter Freunden reicht es.

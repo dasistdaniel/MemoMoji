@@ -11,6 +11,8 @@ services:
       # Passwort für die Admin-Seite (mind. 8 Zeichen), steht in der Datei .env.
       # Ist es leer, bleibt die Admin-Seite ausgeschaltet.
       ADMIN_PASSWORD: ${MEMOMOJI_ADMIN_PASSWORD:-}
+      # Öffentliche Adresse, für die Link-Vorschau beim Teilen (WhatsApp usw.)
+      PUBLIC_URL: ${MEMOMOJI_PUBLIC_URL:-}
     volumes:
       - memomoji-data:/data
 

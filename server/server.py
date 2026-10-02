@@ -31,6 +31,9 @@ from urllib.parse import parse_qs, urlsplit
 
 PORT = int(os.environ.get("PORT", "8080"))
 DB_PATH = os.environ.get("DB_PATH", "/data/memomoji.db")
+# Öffentliche Adresse des Spiels (z. B. https://example.org/memomoji/), für die
+# Link-Vorschau beim Teilen. Leer: wird aus den Anfrage-Headern abgeleitet.
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "").strip()
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(os.path.dirname(__file__), "..", "public"))
 
 # Anzahl Paare pro Stufe (muss zu LEVELS in index.html passen)
@@ -139,7 +142,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        self.send_body(body)
 
     def error(self, status, msg):
         self.send_json(status, {"error": msg})
@@ -210,8 +213,42 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"scores": scores})
         self.error(404, "Nicht gefunden")
 
+    def public_base(self):
+        """Absolute Basis-URL des Spiels, auf "/" endend."""
+        if PUBLIC_URL:
+            return PUBLIC_URL if PUBLIC_URL.endswith("/") else PUBLIC_URL + "/"
+        proto = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip()
+        host = (self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "").split(",")[0].strip()
+        prefix = (self.headers.get("X-Forwarded-Prefix") or "").rstrip("/")
+        path = urlsplit(self.path).path
+        directory = path[: path.rfind("/") + 1]
+        if not re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", host) or proto not in ("http", "https"):
+            return ""
+        return f"{proto}://{host}{prefix}{directory}"
+
+    def do_HEAD(self):
+        # Manche Link-Vorschauen fragen erst mit HEAD an
+        self.head_only = True
+        self.do_GET()
+
+    def send_body(self, body):
+        if not getattr(self, "head_only", False):
+            self.wfile.write(body)
+
     def serve_static(self):
         path = urlsplit(self.path).path
+        if path.endswith("/og-image.jpg"):
+            try:
+                with open(os.path.join(STATIC_DIR, "og-image.jpg"), "rb") as f:
+                    body = f.read()
+            except OSError:
+                return self.error(404, "Nicht gefunden")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            return self.send_body(body)
         if path.endswith("/") and not path.endswith("/admin/") or path.endswith("/index.html"):
             name = "index.html"
         elif path.endswith(("/admin", "/admin/", "/admin.html")) and admin_enabled:
@@ -223,6 +260,16 @@ class Handler(BaseHTTPRequestHandler):
                 body = f.read()
         except OSError:
             return self.error(500, name + " fehlt")
+        if name == "index.html":
+            # Link-Vorschau braucht absolute URLs
+            base = self.public_base()
+            if base:
+                body = body.replace(
+                    b'content="og-image.jpg"', b'content="' + base.encode() + b'og-image.jpg"'
+                ).replace(
+                    b'<meta property="og:type"',
+                    b'<meta property="og:url" content="' + base.encode() + b'">\n<meta property="og:type"',
+                )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -239,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        self.wfile.write(body)
+        self.send_body(body)
 
     # ----- POST -----
     def do_POST(self):
